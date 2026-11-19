@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 410" role="img" aria-labelledby="t d">
+  <title id="t">mcp-poc architecture</title>
+  <desc id="d">The browser calendar reads agenda-api directly. The chat posts to agenda-chat, which loops with OpenAI and calls agenda-mcp over stdio; agenda-mcp calls agenda-api over REST.</desc>
+  <style>
+    :root { --bg:#ffffff; --fg:#131a2a; --muted:#5d6781; --line:#d9deea; --edge:#b3bccf; --node:#f7f8fc; --grid:#e3e7f0;
+            --accent:#2f62ff; --browser:#0e9fb0; --ours:#1f9d6b; --ext:#d4861c; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0d1322; --fg:#e6eaf4; --muted:#8e98b3; --line:#26304a; --edge:#3d4866; --node:#151d32; --grid:#1a2238;
+              --accent:#6f93ff; --browser:#33c4d4; --ours:#3fca91; --ext:#f0a845; }
+    }
+    .bg { fill: var(--bg); }
+    .gdot { fill: var(--grid); }
+    .frame { fill: none; stroke: var(--browser); stroke-opacity: .55; stroke-dasharray: 4 5; }
+    .flabel { font: 600 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .12em; fill: var(--browser); }
+    .edge { fill: none; stroke: var(--edge); stroke-width: 1.8; stroke-dasharray: 7 6; animation: flow 1.2s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -13; } }
+    .head { fill: var(--edge); }
+    .elabel { font: 500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: var(--muted);
+              paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+    .box { fill: var(--node); stroke: var(--line); stroke-width: 1.4; }
+    .focus .box { stroke: var(--accent); stroke-width: 2; }
+    .t { font: 600 15px "Space Grotesk", Inter, system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+    .s { font: 400 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: var(--muted); }
+    .packet { fill: var(--accent); }
+    .halo { fill: var(--accent); opacity: .22; }
+    .lg { font: 400 12px Inter, system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+    @media (prefers-reduced-motion: reduce) { .edge { animation: none; } .pk { display: none; } }
+  </style>
+  <defs>
+    <pattern id="grid" width="22" height="22" patternUnits="userSpaceOnUse"><circle class="gdot" cx="1" cy="1" r="1"/></pattern>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0 10 5 0 10z"/></marker>
+  </defs>
+
+  <rect class="bg" width="1000" height="410" rx="20"/>
+  <rect width="1000" height="410" rx="20" fill="url(#grid)"/>
+
+  <rect class="frame" x="16" y="22" width="212" height="336" rx="18"/>
+  <text class="flabel" x="32" y="44">BROWSER · agenda-web :5174</text>
+
+  <path class="edge" id="e-cal-api" marker-end="url(#arr)" d="M212,98 C282,98 292,196 362,196 L846,196 C888,196 900,226 900,266"/>
+  <path class="edge" id="e-chat-bff" marker-end="url(#arr)" d="M212,296 L328,296"/>
+  <path class="edge" id="e-bff-chat" marker-end="url(#arr)" d="M330,318 L214,318"/>
+  <path class="edge" id="e-bff-llm" marker-end="url(#arr)" d="M405,270 L405,116"/>
+  <path class="edge" id="e-llm-bff" marker-end="url(#arr)" d="M437,114 L437,268"/>
+  <path class="edge" id="e-bff-mcp" marker-end="url(#arr)" d="M512,296 L588,296"/>
+  <path class="edge" id="e-mcp-bff" marker-end="url(#arr)" d="M590,318 L514,318"/>
+  <path class="edge" id="e-mcp-api" marker-end="url(#arr)" d="M762,296 L818,296"/>
+  <path class="edge" id="e-api-mcp" marker-end="url(#arr)" d="M820,318 L764,318"/>
+
+  <text class="elabel" x="560" y="186" text-anchor="middle">GET /events · display only</text>
+  <text class="elabel" x="270" y="284" text-anchor="middle">POST /chat · SSE</text>
+  <text class="elabel" x="452" y="146">Responses API</text>
+  <text class="elabel" x="550" y="284" text-anchor="middle">stdio</text>
+  <text class="elabel" x="790" y="284" text-anchor="middle">REST</text>
+
+  <rect class="box" x="32" y="62" width="180" height="72" rx="14"/><circle cx="54" cy="90" r="5" fill="var(--browser)"/>
+  <text class="t" x="66" y="95">Calendar</text><text class="s" x="54" y="117">FullCalendar · reads</text>
+
+  <rect class="box" x="32" y="270" width="180" height="72" rx="14"/><circle cx="54" cy="298" r="5" fill="var(--browser)"/>
+  <text class="t" x="66" y="303">Chat</text><text class="s" x="54" y="325">React · all actions</text>
+
+  <rect class="box" x="330" y="42" width="182" height="72" rx="14"/><circle cx="352" cy="70" r="5" fill="var(--ext)"/>
+  <text class="t" x="364" y="75">OpenAI</text><text class="s" x="352" y="97">gpt-5.5 · picks tools</text>
+
+  <rect class="box" x="330" y="270" width="182" height="72" rx="14"/><circle cx="352" cy="298" r="5" fill="var(--ours)"/>
+  <text class="t" x="364" y="303">agenda-chat</text><text class="s" x="352" y="325">tool-use loop · :3003</text>
+
+  <g class="focus"><rect class="box" x="590" y="270" width="172" height="72" rx="14"/></g><circle cx="612" cy="298" r="5" fill="var(--accent)"/>
+  <text class="t" x="624" y="303">agenda-mcp</text><text class="s" x="612" y="325">MCP server · 9 tools</text>
+
+  <rect class="box" x="820" y="270" width="164" height="72" rx="14"/><circle cx="842" cy="298" r="5" fill="var(--ours)"/>
+  <text class="t" x="854" y="303">agenda-api</text><text class="s" x="842" y="325">Fastify+SQLite :3002</text>
+
+  <!-- One request, hop by hop, on a 9s loop -->
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.111;1" calcMode="linear"><mpath href="#e-chat-bff"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="1;0" keyTimes="0;0.111"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.111;0.222;1" calcMode="linear"><mpath href="#e-bff-llm"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.111;0.222"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.222;0.333;1" calcMode="linear"><mpath href="#e-llm-bff"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.222;0.333"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.333;0.444;1" calcMode="linear"><mpath href="#e-bff-mcp"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.333;0.444"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.444;0.555;1" calcMode="linear"><mpath href="#e-mcp-api"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.444;0.555"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.555;0.666;1" calcMode="linear"><mpath href="#e-api-mcp"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.555;0.666"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.666;0.777;1" calcMode="linear"><mpath href="#e-mcp-bff"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.666;0.777"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.777;0.888;1" calcMode="linear"><mpath href="#e-bff-chat"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1;0" keyTimes="0;0.777;0.888"/></g>
+  <g class="pk" opacity="0"><circle class="halo" r="12"/><circle class="packet" r="5.5"/>
+    <animateMotion dur="9s" repeatCount="indefinite" keyPoints="0;0;1" keyTimes="0;0.888;1" calcMode="linear"><mpath href="#e-cal-api"/></animateMotion>
+    <animate attributeName="opacity" dur="9s" repeatCount="indefinite" calcMode="discrete" values="0;1" keyTimes="0;0.888"/></g>
+
+  <g transform="translate(32,388)">
+    <circle cx="5" cy="-4" r="4.5" fill="var(--browser)"/><text class="lg" x="16" y="0">Browser</text>
+    <circle cx="105" cy="-4" r="4.5" fill="var(--ours)"/><text class="lg" x="116" y="0">Our services</text>
+    <circle cx="235" cy="-4" r="4.5" fill="var(--accent)"/><text class="lg" x="246" y="0">MCP server</text>
+    <circle cx="355" cy="-4" r="4.5" fill="var(--ext)"/><text class="lg" x="366" y="0">External model</text>
+    <text class="lg" x="936" y="0" text-anchor="end">the moving dot traces one request end to end</text>
+  </g>
+</svg>

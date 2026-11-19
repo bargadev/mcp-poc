@@ -34,27 +34,7 @@ The browser does not talk to MCP directly: the MCP server runs over **stdio** (a
 subprocess), and an LLM decides which tool to call. That is why there is a chat backend in the
 middle.
 
-```mermaid
-flowchart LR
-  subgraph Browser
-    CAL[Calendar<br/>FullCalendar]
-    CHAT[Chat]
-  end
-  subgraph Local machine
-    WEB[agenda-web<br/>Vite :5174]
-    BFF[agenda-chat<br/>Fastify :3003<br/>tool-use loop]
-    MCP[agenda-mcp<br/>stdio · 9 tools]
-    API[(agenda-api<br/>Fastify + SQLite :3002)]
-  end
-  LLM[OpenAI<br/>Responses API]
-
-  CAL -- "GET /api/events (read-only)" --> WEB --> API
-  CHAT -- "POST /chat (SSE)" --> WEB --> BFF
-  BFF -- "messages + tool definitions" --> LLM
-  LLM -- "function_call or text" --> BFF
-  BFF -- "callTool (stdio)" --> MCP
-  MCP -- "REST fetch" --> API
-```
+![Architecture: the calendar reads agenda-api directly; the chat goes through agenda-chat, which loops with OpenAI and calls agenda-mcp over stdio, which calls agenda-api over REST](docs/architecture.svg)
 
 One request from start to finish:
 
