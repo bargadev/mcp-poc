@@ -1,61 +1,62 @@
-# mcp-poc · Agenda via MCP
+# mcp-poc · Agenda over MCP
 
-Prova de conceito de um **MCP server** (Model Context Protocol) que transforma uma API REST de
-agenda em *tools* para agentes de IA, mais um **frontend de calendário com chat** em que o
-usuário escreve em linguagem natural ("marca jiu-jitsu seg, qua e sex 19h30 até o fim do ano")
-e o assistente executa as ações chamando essas tools.
+Proof of concept of an **MCP server** (Model Context Protocol) that turns an agenda REST API into
+*tools* for AI agents, plus a **calendar frontend with a chat** where the user types in natural
+language ("jiu-jitsu every Mon, Wed and Fri 7:30pm until the end of the year") and the assistant
+carries out the actions by calling those tools.
 
-O mesmo MCP server funciona em três lugares, sem mudar uma linha:
+The same MCP server runs in three places, without changing a line:
 
-- no **chat web** deste repositório (OpenAI + MCP Client próprio);
-- no **Claude Code** (`claude mcp add …`);
-- no **MCP Inspector**.
+- in this repo's **web chat** (OpenAI + its own MCP client);
+- in **Claude Code** (`claude mcp add …`);
+- in the **MCP Inspector**.
 
-![Calendário semanal com o chat ao lado: a pergunta "O que tenho amanhã?", a tool "Consultou a agenda" e a resposta listando os eventos](docs/screenshot.jpg)
+![Weekly calendar with the chat beside it: the question "What do I have tomorrow?", the "Checked the agenda" tool call and the answer listing the events](docs/screenshot.jpg)
 
-## Sumário
+## Contents
 
-- [Arquitetura](#arquitetura)
-- [Início rápido](#início-rápido)
-- [Pacotes](#pacotes)
-- [API REST (`agenda-api`)](#api-rest-agenda-api)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Packages](#packages)
+- [REST API (`agenda-api`)](#rest-api-agenda-api)
 - [MCP server (`agenda-mcp`)](#mcp-server-agenda-mcp)
 - [Chat (`agenda-chat` + `agenda-web`)](#chat-agenda-chat--agenda-web)
-- [Usar no Claude Code e no MCP Inspector](#usar-no-claude-code-e-no-mcp-inspector)
-- [Pedidos para testar](#pedidos-para-testar)
-- [Testes](#testes)
-- [Configuração](#configuração)
-- [Decisões de projeto](#decisões-de-projeto)
-- [Limitações e próximos passos](#limitações-e-próximos-passos)
+- [Using it in Claude Code and the MCP Inspector](#using-it-in-claude-code-and-the-mcp-inspector)
+- [Prompts to try](#prompts-to-try)
+- [Tests](#tests)
+- [Configuration](#configuration)
+- [Design decisions](#design-decisions)
+- [Limitations and next steps](#limitations-and-next-steps)
 
-## Arquitetura
+## Architecture
 
-O navegador não fala com o MCP diretamente: o MCP server roda em **stdio** (um subprocesso
-local), e quem decide qual tool chamar é um LLM. Por isso existe um backend de chat no meio.
+The browser does not talk to MCP directly: the MCP server runs over **stdio** (a local
+subprocess), and an LLM decides which tool to call. That is why there is a chat backend in the
+middle.
 
 ```mermaid
 flowchart LR
-  subgraph Navegador
-    CAL[Calendário<br/>FullCalendar]
+  subgraph Browser
+    CAL[Calendar<br/>FullCalendar]
     CHAT[Chat]
   end
-  subgraph Máquina local
+  subgraph Local machine
     WEB[agenda-web<br/>Vite :5174]
-    BFF[agenda-chat<br/>Fastify :3003<br/>loop de tool use]
+    BFF[agenda-chat<br/>Fastify :3003<br/>tool-use loop]
     MCP[agenda-mcp<br/>stdio · 9 tools]
     API[(agenda-api<br/>Fastify + SQLite :3002)]
   end
   LLM[OpenAI<br/>Responses API]
 
-  CAL -- "GET /api/eventos (só leitura)" --> WEB --> API
+  CAL -- "GET /api/events (read-only)" --> WEB --> API
   CHAT -- "POST /chat (SSE)" --> WEB --> BFF
-  BFF -- "mensagens + definição das tools" --> LLM
-  LLM -- "function_call ou texto" --> BFF
+  BFF -- "messages + tool definitions" --> LLM
+  LLM -- "function_call or text" --> BFF
   BFF -- "callTool (stdio)" --> MCP
-  MCP -- "fetch REST" --> API
+  MCP -- "REST fetch" --> API
 ```
 
-Um pedido do começo ao fim:
+One request from start to finish:
 
 ```mermaid
 sequenceDiagram
@@ -64,291 +65,299 @@ sequenceDiagram
   participant O as OpenAI
   participant M as agenda-mcp
   participant A as agenda-api
-  U->>C: POST /chat "marca reunião sexta 14h às 15h" + agora/fuso
-  C->>O: mensagens + 9 tools
-  O-->>C: function_call verificar_disponibilidade
+  U->>C: POST /chat "book a meeting Friday 2pm to 3pm" + now/timeZone
+  C->>O: messages + 9 tools
+  O-->>C: function_call check_availability
   C-->>U: SSE tool_call
   C->>M: callTool
-  M->>A: GET /eventos?de&ate
+  M->>A: GET /events?from&to
   A-->>M: []
-  M-->>C: livre: true
+  M-->>C: free: true
   C->>O: function_call_output
-  O-->>C: function_call criar_evento
+  O-->>C: function_call create_event
   C->>M: callTool
-  M->>A: POST /eventos
+  M->>A: POST /events
   A-->>M: 201 + id
-  M-->>C: evento + conflitos
-  C-->>U: SSE tool_result (mutou: true)
-  U->>A: GET /eventos (recarrega o calendário e destaca o evento)
+  M-->>C: event + conflicts
+  C-->>U: SSE tool_result (mutated: true)
+  U->>A: GET /events (reloads the calendar and highlights the event)
   C->>O: function_call_output
-  O-->>C: texto final
-  C-->>U: SSE mensagem + fim
+  O-->>C: final text
+  C-->>U: SSE message + done
 ```
 
-## Início rápido
+## Quick start
 
-**Pré-requisitos:** Node **22** (`nvm use`; ver `.nvmrc`), pnpm 10 e uma chave da OpenAI.
+**Requirements:** Node **22** (`nvm use`; see `.nvmrc`), pnpm 10 and an OpenAI key.
 
 ```bash
 pnpm install
-cp .env.example .env      # defina OPENAI_API_KEY (ou OPENAI_ENV_FILE)
-pnpm dev                  # sobe api (:3002), chat (:3003) e web (:5174)
-pnpm seed                 # em outro terminal: 3 eventos de exemplo
+cp .env.example .env      # set OPENAI_API_KEY (or OPENAI_ENV_FILE)
+pnpm dev                  # starts api (:3002), chat (:3003) and web (:5174)
+pnpm seed                 # in another terminal: 3 sample events
 open http://localhost:5174
 ```
 
-O `.npmrc` fixa `use-node-version=22.22.2`: os scripts `pnpm …` rodam nesse Node mesmo que o
-Node padrão do shell seja outro (o pnpm baixa a versão na primeira execução).
+`.npmrc` pins `use-node-version=22.22.2`: `pnpm …` scripts run on that Node even if your shell's
+default Node is different (pnpm downloads it on first run).
 
-| Script           | O que faz                                                             |
-|------------------|-----------------------------------------------------------------------|
-| `pnpm dev`       | API + chat + web em paralelo, em watch                                |
-| `pnpm dev:api`   | só a API em `http://127.0.0.1:3002` (banco `agenda.db`)               |
-| `pnpm dev:chat`  | só o backend do chat em `:3003` (precisa da chave da OpenAI)          |
-| `pnpm dev:web`   | só o frontend em `http://localhost:5174`                              |
-| `pnpm dev:mcp`   | o MCP server em stdio (é o que o Claude Code executa)                 |
-| `pnpm seed`      | cria 3 eventos relativos a hoje, via HTTP (a API precisa estar no ar) |
-| `pnpm inspect`   | abre o MCP Inspector apontando para o server                          |
-| `pnpm test`      | testes de todos os pacotes                                            |
-| `pnpm typecheck` | `tsc` em todos os pacotes                                             |
+| Script           | What it does                                                        |
+|------------------|---------------------------------------------------------------------|
+| `pnpm dev`       | API + chat + web in parallel, in watch mode                         |
+| `pnpm dev:api`   | only the API at `http://127.0.0.1:3002` (database `agenda.db`)      |
+| `pnpm dev:chat`  | only the chat backend on `:3003` (needs the OpenAI key)             |
+| `pnpm dev:web`   | only the frontend at `http://localhost:5174`                        |
+| `pnpm dev:mcp`   | the MCP server over stdio (what Claude Code runs)                   |
+| `pnpm seed`      | creates 3 events relative to today, over HTTP (the API must be up)  |
+| `pnpm inspect`   | opens the MCP Inspector pointed at the server                       |
+| `pnpm test`      | tests for every package                                             |
+| `pnpm typecheck` | `tsc` for every package                                             |
 
-## Pacotes
+## Packages
 
 ```
 packages/
-  agenda-api/    API REST de agenda (Fastify + SQLite)            → "a API que já existia"
-  agenda-mcp/    MCP server em stdio, wrapper fino sobre a API    → o foco da POC
-  agenda-chat/   backend do chat: OpenAI + MCP Client + SSE
-  agenda-web/    React + Vite: calendário + chat
+  agenda-api/    agenda REST API (Fastify + SQLite)               → "the API that already existed"
+  agenda-mcp/    stdio MCP server, a thin wrapper over the API    → the focus of the POC
+  agenda-chat/   chat backend: OpenAI + MCP client + SSE
+  agenda-web/    React + Vite: calendar + chat
 ```
 
-| Pacote        | Arquivos principais                                                                                                  |
-|---------------|----------------------------------------------------------------------------------------------------------------------|
-| `agenda-api`  | `schemas.ts` (Zod, exportado para reuso), `repositorio.ts` (SQL), `app.ts` (rotas e erros), `seed.ts`                 |
-| `agenda-mcp`  | `tools.ts` (CRUD + disponibilidade), `tools-lote.ts` (lote e recorrência), `recorrencia.ts`, `api-client.ts`, `index.ts` (stdio) |
-| `agenda-chat` | `agente.ts` (loop de tool use e confirmação), `app.ts` (HTTP + SSE), `mcp.ts` (sobe o MCP como subprocesso), `config.ts` |
-| `agenda-web`  | `Calendario.tsx`, `Chat.tsx`, `chatClient.ts` (POST + leitura do stream SSE)                                          |
+| Package       | Main files                                                                                                     |
+|---------------|----------------------------------------------------------------------------------------------------------------|
+| `agenda-api`  | `schemas.ts` (Zod, exported for reuse), `repository.ts` (SQL), `app.ts` (routes and errors), `seed.ts`          |
+| `agenda-mcp`  | `tools.ts` (CRUD + availability), `batch-tools.ts` (batch and recurrence), `recurrence.ts`, `api-client.ts`, `index.ts` (stdio) |
+| `agenda-chat` | `agent.ts` (tool-use loop and confirmation), `app.ts` (HTTP + SSE), `mcp.ts` (spawns the MCP subprocess), `config.ts` |
+| `agenda-web`  | `Calendar.tsx`, `Chat.tsx`, `chatClient.ts` (POST + reading the SSE stream)                                     |
 
-O `agenda-mcp` importa da API só os schemas e tipos (`@agenda/api/schemas`), como faria com um
-pacote de contrato publicado. Toda a regra de negócio fica na API.
+`agenda-mcp` imports only schemas and types from the API (`@agenda/api/schemas`), as it would
+from a published contract package. All business rules live in the API.
 
 **Stack:** TypeScript strict, pnpm workspaces, Zod 4, Fastify 5, better-sqlite3, Vitest,
 `@modelcontextprotocol/sdk` 1.32 (`registerTool`), `openai` 7 (Responses API), React 19,
 FullCalendar 6, Vite 8.
 
-## API REST (`agenda-api`)
+## REST API (`agenda-api`)
 
-Entidade `Evento`: `id` (uuid), `titulo`, `descricao` (opcional), `inicio`, `fim`, `criadoEm`,
-`atualizadoEm`.
+`Event` entity: `id` (uuid), `title`, `description` (optional), `start`, `end`, `createdAt`,
+`updatedAt`.
 
-| Método | Rota                    | Notas                                                                                  |
-|--------|-------------------------|----------------------------------------------------------------------------------------|
-| GET    | `/eventos?de=&ate=`     | eventos que se sobrepõem a `[de, ate)`; filtros opcionais; ordenado por início         |
-| GET    | `/eventos/:id`          | 404 `Evento não encontrado com id X`                                                   |
-| POST   | `/eventos`              | 201; 400 com `erro` e `detalhes[]`                                                     |
-| PATCH  | `/eventos/:id`          | parcial; `descricao: null` limpa; valida `fim > inicio` depois do merge                |
-| DELETE | `/eventos/:id`          | 204                                                                                    |
-| POST   | `/eventos/lote`         | `{ eventos: [...] }` → 201 `{ eventos }`; atômico; erro com índice (`eventos.3.fim`)    |
-| POST   | `/eventos/lote/remover` | `{ ids: [...] }` → `{ removidos }`; atômico; 404 lista os ids inexistentes             |
+| Method | Route                  | Notes                                                                                 |
+|--------|------------------------|---------------------------------------------------------------------------------------|
+| GET    | `/events?from=&to=`    | events overlapping `[from, to)`; optional filters; ordered by start                   |
+| GET    | `/events/:id`          | 404 `Event not found with id X`                                                       |
+| POST   | `/events`              | 201; 400 with `error` and `details[]`                                                 |
+| PATCH  | `/events/:id`          | partial; `description: null` clears it; checks `end > start` after the merge          |
+| DELETE | `/events/:id`          | 204                                                                                   |
+| POST   | `/events/batch`        | `{ events: [...] }` → 201 `{ events }`; atomic; errors carry the index (`events.3.end`) |
+| POST   | `/events/batch/delete` | `{ ids: [...] }` → `{ deleted }`; atomic; 404 lists the missing ids                   |
 
-**Datas:** ISO 8601 **com timezone** (`Z` ou `±hh:mm`, segundos obrigatórios), ex.:
-`2026-11-20T15:00:00-03:00`. O offset enviado é preservado na resposta; as comparações usam o
-instante (epoch), então `17:00Z` e `14:00-03:00` são o mesmo horário. Os intervalos são
-semiabertos: um evento das 14h às 15h não conflita com outro das 15h às 16h.
+**Dates:** ISO 8601 **with a timezone** (`Z` or `±hh:mm`, seconds required), e.g.
+`2026-11-20T15:00:00-03:00`. The offset you send is kept in the response; comparisons use the
+instant (epoch), so `17:00Z` and `14:00-03:00` are the same time. Intervals are half-open: an
+event from 2pm to 3pm does not conflict with one from 3pm to 4pm.
 
-**Erros legíveis**, pensados para chegar ao modelo sem tradução:
+**Readable errors**, designed to reach the model as-is:
 
 ```bash
-curl -s -XPOST localhost:3002/eventos -H 'content-type: application/json' \
-  -d '{"titulo":"x","inicio":"2026-11-20T15:00:00-03:00","fim":"2026-11-20T14:00:00-03:00"}'
-# {"erro":"Dados inválidos — fim: fim deve ser depois de inicio",
-#  "detalhes":[{"campo":"fim","mensagem":"fim deve ser depois de inicio"}]}
+curl -s -XPOST localhost:3002/events -H 'content-type: application/json' \
+  -d '{"title":"x","start":"2026-11-20T15:00:00-03:00","end":"2026-11-20T14:00:00-03:00"}'
+# {"error":"Invalid data — end: end must be after start",
+#  "details":[{"field":"end","message":"end must be after start"}]}
 ```
 
-A API **permite** eventos sobrepostos. Quem detecta conflito é o MCP
-(`verificar_disponibilidade`), e as tools de criação devolvem `conflitos` como aviso.
+The API **allows** overlapping events. Conflict detection happens in the MCP server
+(`check_availability`), and the create tools return `conflicts` as a warning.
 
 ## MCP server (`agenda-mcp`)
 
-Transporte stdio. A URL da API vem de `AGENDA_API_URL` (padrão `http://localhost:3002`).
+stdio transport. The API URL comes from `AGENDA_API_URL` (default `http://localhost:3002`).
 
-| Tool                        | Annotations                                | Saída (`structuredContent`)          |
-|-----------------------------|--------------------------------------------|--------------------------------------|
-| `listar_eventos`            | `readOnlyHint`                             | `{ de, ate, total, eventos[] }`      |
-| `buscar_evento`             | `readOnlyHint`                             | `{ evento }`                         |
-| `verificar_disponibilidade` | `readOnlyHint`                             | `{ livre, de, ate, conflitos[] }`    |
-| `criar_evento`              | `destructiveHint: false`                   | `{ evento, conflitos[] }`            |
-| `atualizar_evento`          | `destructiveHint: false`, `idempotentHint` | `{ evento, conflitos[] }`            |
-| `remover_evento`            | `destructiveHint: true`, `idempotentHint`  | `{ removido: true, evento }`         |
-| `criar_eventos_recorrentes` | `destructiveHint: false`                   | `{ total, eventos[], conflitos[] }`  |
-| `criar_eventos_em_lote`     | `destructiveHint: false`                   | `{ total, eventos[], conflitos[] }`  |
-| `remover_eventos_em_lote`   | `destructiveHint: true`, `idempotentHint`  | `{ removidos }`                      |
+| Tool                      | Annotations                                | Output (`structuredContent`)        |
+|---------------------------|--------------------------------------------|-------------------------------------|
+| `list_events`             | `readOnlyHint`                             | `{ from, to, total, events[] }`     |
+| `get_event`               | `readOnlyHint`                             | `{ event }`                         |
+| `check_availability`      | `readOnlyHint`                             | `{ free, from, to, conflicts[] }`   |
+| `create_event`            | `destructiveHint: false`                   | `{ event, conflicts[] }`            |
+| `update_event`            | `destructiveHint: false`, `idempotentHint` | `{ event, conflicts[] }`            |
+| `delete_event`            | `destructiveHint: true`, `idempotentHint`  | `{ deleted: true, event }`          |
+| `create_recurring_events` | `destructiveHint: false`                   | `{ total, events[], conflicts[] }`  |
+| `create_events_batch`     | `destructiveHint: false`                   | `{ total, events[], conflicts[] }`  |
+| `delete_events_batch`     | `destructiveHint: true`, `idempotentHint`  | `{ deleted }`                       |
 
-Princípios das tools:
+Tool principles:
 
-- **A description é o prompt.** Cada uma diz quando usar, o formato de data com exemplo, como
-  converter "amanhã"/"sexta", e qual tool vem antes (ex.: "descubra o id com `listar_eventos`").
-  O server também manda `instructions` gerais na inicialização.
-- **Sempre devolver ids**, no texto e no `structuredContent`, para o modelo encadear ações.
-- **Erro vira `isError: true` com mensagem acionável**, nunca stack trace: `Evento não encontrado
-  com id X. Use listar_eventos para encontrar o id correto.`, ou `Não foi possível conectar à API
-  de agenda em … Verifique se ela está rodando (pnpm dev:api)`.
-- **Validação antes da API:** data sem timezone ou id que não é UUID nem chega a fazer `fetch`.
-- **Resposta dupla:** `structuredContent` (validado por `outputSchema`) e um `text` com resumo
-  legível + JSON, para clientes que só leem texto.
-- **Lote em vez de repetição:** séries e listas são uma única chamada. `criar_eventos_recorrentes`
-  recebe dias da semana, horário e período, e o próprio server gera as datas. Antes disso, o
-  modelo criava uma ocorrência por tool call e estourava o limite de passos do chat.
+- **The description is the prompt.** Each one says when to use it, the date format with an
+  example, how to convert "tomorrow"/"Friday", and which tool comes first (e.g. "find the id
+  with `list_events`"). The server also sends general `instructions` on initialization.
+- **Always return ids**, in the text and in `structuredContent`, so the model can chain actions.
+- **Errors become `isError: true` with an actionable message**, never a stack trace: `Event not
+  found with id X. Use list_events to find the correct id.`, or `Could not connect to the agenda
+  API at … Check that it is running (pnpm dev:api)`.
+- **Validation before the API:** a date without timezone or an id that is not a UUID never
+  reaches `fetch`.
+- **Dual response:** `structuredContent` (validated by `outputSchema`) and a `text` with a
+  readable summary + JSON, for clients that only read text.
+- **Batches instead of repetition:** series and lists are a single call.
+  `create_recurring_events` takes weekdays, times and a period, and the server generates the
+  dates. Before that, the model created one occurrence per tool call and hit the chat's step
+  limit.
 
 ## Chat (`agenda-chat` + `agenda-web`)
 
-### Backend (`agenda-chat`, porta 3003)
+### Backend (`agenda-chat`, port 3003)
 
-1. Na inicialização, sobe o `agenda-mcp` como **subprocesso stdio** (o mesmo Node, via
-   `--import tsx`), chama `listTools` e converte cada tool em *function tool* da OpenAI
-   (`inputSchema` → `parameters`), guardando as annotations.
-2. A cada mensagem, chama `responses.create` com o histórico, as instruções (com a data, a hora
-   e o fuso do navegador) e as tools, com `parallel_tool_calls: false`.
-3. Se vier `function_call`, executa `callTool` no MCP, acrescenta um `function_call_output` e
-   repete. Se vier texto, termina. O limite é de 20 passos; se estourar, o que já foi feito
-   fica salvo e o usuário pode dizer "continue".
-4. Cada passo vai ao navegador por **SSE**.
+1. On startup it spawns `agenda-mcp` as a **stdio subprocess** (same Node, via
+   `--import tsx`), calls `listTools` and converts each tool into an OpenAI *function tool*
+   (`inputSchema` → `parameters`), keeping the annotations.
+2. For each message it calls `responses.create` with the history, the instructions (with the
+   browser's date, time and time zone) and the tools, with `parallel_tool_calls: false`.
+3. On a `function_call` it runs `callTool` on the MCP server, appends a `function_call_output`
+   and repeats. On text, it stops. The limit is 20 steps; if it is hit, what was done stays
+   saved and the user can say "continue".
+4. Every step goes to the browser over **SSE**.
 
-| Evento SSE    | Quando                                                                     |
-|---------------|----------------------------------------------------------------------------|
-| `inicio`      | abre o stream; traz o `conversaId`                                         |
-| `tool_call`   | o modelo pediu uma tool (nome + argumentos)                                |
-| `tool_result` | resultado; `mutou: true` quando a tool não é `readOnlyHint`                |
-| `confirmacao` | a tool tem `destructiveHint`: o loop pausa e espera o usuário              |
-| `mensagem`    | resposta final em texto                                                    |
-| `erro`        | erro legível (ex.: chave recusada, 429)                                    |
-| `fim`         | fecha o stream                                                             |
+| SSE event      | When                                                                       |
+|----------------|----------------------------------------------------------------------------|
+| `start`        | opens the stream; carries the `conversationId`                             |
+| `tool_call`    | the model asked for a tool (name + arguments)                              |
+| `tool_result`  | the result; `mutated: true` when the tool is not `readOnlyHint`            |
+| `confirmation` | the tool has `destructiveHint`: the loop pauses and waits for the user     |
+| `message`      | final text answer                                                          |
+| `error`        | readable error (e.g. key rejected, 429)                                    |
+| `done`         | closes the stream                                                          |
 
-**Confirmação humana, guiada pelas annotations do MCP:** quando o modelo chama uma tool
-destrutiva (`remover_evento`, `remover_eventos_em_lote`), o backend não executa. Ele descreve a
-ação com dados reais, buscados por tools de leitura (ex.: `Remover 18 evento(s): 18× “Jiu-jitsu”
-(sex., 20/11 → qua., 30/12)`), e espera `POST /chat/confirmar`. Cancelar, ou mandar outra
-mensagem no lugar, devolve ao modelo um `function_call_output` dizendo que a ação **não** foi
-executada.
+**Human confirmation, driven by the MCP annotations:** when the model calls a destructive tool
+(`delete_event`, `delete_events_batch`), the backend does not run it. It describes the action
+with real data, fetched through read-only tools (e.g. `Delete 18 event(s): 18× “Jiu-jitsu”
+(Fri, 11/20 → Wed, 12/30)`), and waits for `POST /chat/confirm`. Cancelling, or sending another
+message instead, gives the model a `function_call_output` saying the action was **not**
+executed.
 
-Rotas: `POST /chat` (`{ conversaId?, texto, agora, fuso }`), `POST /chat/confirmar`
-(`{ conversaId, callId, aprovado, agora, fuso }`) e `GET /chat/health` (`{ ok, modelo }`).
+Routes: `POST /chat` (`{ conversationId?, text, now, timeZone }`), `POST /chat/confirm`
+(`{ conversationId, callId, approved, now, timeZone }`) and `GET /chat/health`
+(`{ ok, model }`).
 
-### Frontend (`agenda-web`, porta 5174)
+The assistant replies in whatever language the user writes in; the code, tools and UI are in
+English.
 
-- **Calendário** (FullCalendar, dia/semana/mês, pt-BR) que lê `GET /eventos` direto da API, só
-  para exibir. Toda ação passa pelo chat.
-- **Chat** com cada tool chamada visível ("Consultou a agenda · sex, 20/11 · 3 eventos"), que
-  expande para mostrar argumentos e resultado; um cartão de confirmação para ações destrutivas;
-  e sugestões de pedidos.
-- Quando uma tool altera a agenda, o calendário **recarrega**, navega até a data e **destaca** o
-  evento.
-- **Arrastar** no calendário preenche "Marca um evento sex, 21/11 das 14h às 15h: ".
-  **Clicar** num evento preenche "Sobre “Daily” (…): ".
-- O Vite faz proxy de `/api` → `:3002` e de `/chat` → `:3003`, então não há CORS.
+### Frontend (`agenda-web`, port 5174)
 
-## Usar no Claude Code e no MCP Inspector
+- **Calendar** (FullCalendar, day/week/month) that reads `GET /events` straight from the API,
+  for display only. Every action goes through the chat.
+- **Chat** showing each tool call ("Checked the agenda · Fri, Nov 20 · 3 event(s)"), which
+  expands to show arguments and result; a confirmation card for destructive actions; and
+  suggested prompts.
+- When a tool changes the agenda, the calendar **reloads**, jumps to the date and
+  **highlights** the event.
+- **Dragging** on the calendar pre-fills "Book an event on Fri, Nov 21 from 2pm to 3pm: ".
+  **Clicking** an event pre-fills "About “Daily” (…): ".
+- Vite proxies `/api` → `:3002` and `/chat` → `:3003`, so there is no CORS.
 
-**Claude Code** (com a API rodando):
+## Using it in Claude Code and the MCP Inspector
+
+**Claude Code** (with the API running):
 
 ```bash
-claude mcp add agenda -e AGENDA_API_URL=http://localhost:3002 -- pnpm --dir /caminho/para/mcp-poc dev:mcp
+claude mcp add agenda -e AGENDA_API_URL=http://localhost:3002 -- pnpm --dir /path/to/mcp-poc dev:mcp
 ```
 
-Confira com `claude mcp list` ou `/mcp`. O pnpm não polui o stdout, então o JSON-RPC funciona
-pelo `pnpm --dir`.
+Check it with `claude mcp list` or `/mcp`. pnpm does not pollute stdout, so JSON-RPC works
+through `pnpm --dir`.
 
 **MCP Inspector:**
 
 ```bash
-pnpm inspect                                   # UI web; o Inspector imprime a URL com token
+pnpm inspect                                   # web UI; the Inspector prints the URL with a token
 pnpm exec mcp-inspector --cli -e AGENDA_API_URL=http://localhost:3002 \
   tsx packages/agenda-mcp/src/index.ts --method tools/list
 ```
 
-O Inspector não herda o env do shell; o script `inspect` repassa `AGENDA_API_URL` via `-e`.
+The Inspector does not inherit the shell env; the `inspect` script passes `AGENDA_API_URL`
+through `-e`.
 
-## Pedidos para testar
+## Prompts to try
 
-| Pedido                                                        | Fluxo esperado                                                    |
-|---------------------------------------------------------------|-------------------------------------------------------------------|
-| "o que tenho amanhã?"                                         | `listar_eventos` (00:00 de amanhã → 00:00 do dia seguinte)        |
-| "estou livre amanhã ao meio-dia?"                             | `verificar_disponibilidade` → ocupado pelo "Almoço com cliente"   |
-| "marca reunião sexta 14h às 15h"                              | `verificar_disponibilidade` → `criar_evento`                      |
-| "marca call amanhã 13h às 14h"                                | cria e avisa o conflito com o almoço                              |
-| "muda a reunião de sexta para 16h"                            | `listar_eventos` → `atualizar_evento` com `inicio` e `fim`        |
-| "jiu-jitsu toda seg, qua e sex 19h30 às 20h30 até 31/12"      | `criar_eventos_recorrentes` (uma chamada, ~18 eventos)            |
-| "cancela o almoço com cliente"                                | `listar_eventos` → confirmação → `remover_evento`                 |
-| "remove todos os jiu-jitsu"                                   | `listar_eventos` → uma confirmação → `remover_eventos_em_lote`    |
+| Prompt                                                           | Expected flow                                                  |
+|------------------------------------------------------------------|----------------------------------------------------------------|
+| "what do I have tomorrow?"                                       | `list_events` (00:00 tomorrow → 00:00 the day after)           |
+| "am I free tomorrow at noon?"                                    | `check_availability` → busy with "Lunch with client"           |
+| "book a meeting Friday 2pm to 3pm"                               | `check_availability` → `create_event`                          |
+| "book a call tomorrow 1pm to 2pm"                                | creates it and warns about the conflict with lunch             |
+| "move Friday's meeting to 4pm"                                   | `list_events` → `update_event` with `start` and `end`          |
+| "jiu-jitsu every Mon, Wed and Fri 7:30pm to 8:30pm until Dec 31" | `create_recurring_events` (one call, ~18 events)               |
+| "cancel the lunch with client"                                   | `list_events` → confirmation → `delete_event`                  |
+| "delete all the jiu-jitsu sessions"                              | `list_events` → one confirmation → `delete_events_batch`       |
 
-## Testes
+## Tests
 
 ```bash
-pnpm test        # 66 testes: api 27 · mcp 23 · chat 16
+pnpm test        # 66 tests: api 27 · mcp 23 · chat 16
 pnpm typecheck
 ```
 
-| Pacote        | Como                                                                                   | Cobre                                                                                                        |
-|---------------|----------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `agenda-api`  | `app.inject` (Fastify) + SQLite `:memory:`                                              | criação válida, fim antes/igual ao início, 400 legível, 404, sobreposição (parcial, borda, fusos diferentes), PATCH com merge, lote atômico |
-| `agenda-mcp`  | `Client` do SDK + `InMemoryTransport`, `fetch` mockado                                  | catálogo e annotations, criação, conflito, inexistente, id inválido, API fora do ar, recorrência (expansão, limite, compactação), lote |
-| `agenda-chat` | OpenAI mockada (roteiro de respostas) + MCP real em memória + API real em memória        | conversão das tools, loop leitura/escrita, erro de tool, JSON inválido, limite de passos, confirmação (aprovar, cancelar, nova mensagem cancela), lote, SSE, erro 401 |
+| Package       | How                                                                              | Covers                                                                                                        |
+|---------------|----------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
+| `agenda-api`  | `app.inject` (Fastify) + SQLite `:memory:`                                        | valid create, end before/equal to start, readable 400, 404, overlap (partial, edge, different time zones), PATCH merge, atomic batch |
+| `agenda-mcp`  | SDK `Client` + `InMemoryTransport`, mocked `fetch`                                | catalog and annotations, create, conflict, nonexistent, invalid id, API down, recurrence (expansion, limit, compaction), batch |
+| `agenda-chat` | mocked OpenAI (scripted responses) + real in-memory MCP + real in-memory API      | tool conversion, read/write loop, tool error, invalid JSON, step limit, confirmation (approve, cancel, new message cancels), batch, SSE, 401 error |
 
-O frontend é validado com `typecheck` e build, e foi testado de ponta a ponta no navegador.
+The frontend is checked with `typecheck` and a build, and was tested end to end in the browser.
 
-## Configuração
+## Configuration
 
-O `.env` da raiz é opcional e gitignored; ver `.env.example`.
+The root `.env` is optional and gitignored; see `.env.example`.
 
-| Variável                  | Usado por          | Padrão                   | O que é                                                                |
-|---------------------------|--------------------|--------------------------|------------------------------------------------------------------------|
-| `OPENAI_API_KEY`          | chat               | —                        | chave da OpenAI                                                        |
-| `OPENAI_ENV_FILE`         | chat               | —                        | alternativa: caminho de outro `.env`; só a `OPENAI_API_KEY` é lida dele |
-| `OPENAI_MODEL`            | chat               | `gpt-5.5`                | modelo da Responses API                                                |
-| `OPENAI_REASONING_EFFORT` | chat               | `low`                    | `minimal` · `low` · `medium` · `high`                                  |
-| `AGENDA_API_URL`          | mcp, chat, web, seed | `http://localhost:3002` | URL da agenda-api                                                      |
-| `PORT` / `HOST`           | api                | `3002` / `127.0.0.1`     |                                                                        |
-| `AGENDA_DB`               | api                | `agenda.db`              | caminho do SQLite (`:memory:` funciona)                                |
-| `CHAT_PORT`               | chat               | `3003`                   |                                                                        |
-| `WEB_PORT`                | web                | `5174`                   |                                                                        |
-| `SEED_OFFSET`             | seed               | `-03:00`                 | fuso dos eventos de exemplo                                            |
+| Variable                  | Used by              | Default                 | What it is                                                         |
+|---------------------------|----------------------|-------------------------|--------------------------------------------------------------------|
+| `OPENAI_API_KEY`          | chat                 | —                       | OpenAI key                                                         |
+| `OPENAI_ENV_FILE`         | chat                 | —                       | alternative: path to another `.env`; only `OPENAI_API_KEY` is read |
+| `OPENAI_MODEL`            | chat                 | `gpt-5.5`               | Responses API model                                                |
+| `OPENAI_REASONING_EFFORT` | chat                 | `low`                   | `minimal` · `low` · `medium` · `high`                              |
+| `AGENDA_API_URL`          | mcp, chat, web, seed | `http://localhost:3002` | agenda-api URL                                                     |
+| `PORT` / `HOST`           | api                  | `3002` / `127.0.0.1`    |                                                                    |
+| `AGENDA_DB`               | api                  | `agenda.db`             | SQLite path (`:memory:` works)                                     |
+| `CHAT_PORT`               | chat                 | `3003`                  |                                                                    |
+| `WEB_PORT`                | web                  | `5174`                  |                                                                    |
+| `SEED_OFFSET`             | seed                 | `-03:00`                | time zone of the sample events                                     |
 
-## Decisões de projeto
+## Design decisions
 
-- **MCP como wrapper fino.** Validação e regra ficam na API. O MCP traduz para tools, melhora as
-  mensagens para o modelo e só tem lógica própria onde ela é de interface com o agente:
-  detecção de conflito, expansão de recorrência e compactação de listas longas.
-- **Sobreposição permitida na API.** Agenda real tem conflitos; o agente avisa em vez de
-  bloquear.
-- **Recorrência sem regra persistida.** `criar_eventos_recorrentes` gera eventos independentes
-  com offset fixo (o Brasil não tem horário de verão desde 2019). Guardar regras (RRULE) ficou
-  fora do escopo.
-- **Confirmação no cliente MCP, guiada por `destructiveHint`.** O server declara o risco e quem
-  hospeda o agente decide como confirmar. Aqui, um cartão no chat.
-- **Uma tool por vez** (`parallel_tool_calls: false`): simplifica a pausa para confirmação e
-  deixa o histórico linear.
-- **Node 22.** As versões atuais de Fastify (light-my-request), Vite/Vitest e do Inspector
-  precisam de `require(esm)` / Node ≥ 22. O Node 20 está fora de suporte desde abril de 2026.
-- **Inspector fixado em 2.13.0:** a 2.14 em diante exige Node ≥ 22.23.4.
+- **MCP as a thin wrapper.** Validation and rules live in the API. The MCP server translates to
+  tools, improves messages for the model and only has its own logic where it is about the agent
+  interface: conflict detection, recurrence expansion and compacting long lists.
+- **Overlaps allowed in the API.** Real agendas have conflicts; the agent warns instead of
+  blocking.
+- **Recurrence without a stored rule.** `create_recurring_events` generates independent events
+  with a fixed offset (Brazil has had no daylight saving time since 2019). Storing rules
+  (RRULE) was out of scope.
+- **Confirmation in the MCP client, driven by `destructiveHint`.** The server declares the risk
+  and whoever hosts the agent decides how to confirm. Here, a card in the chat.
+- **One tool at a time** (`parallel_tool_calls: false`): makes pausing for confirmation simple
+  and keeps the history linear.
+- **Node 22.** Current versions of Fastify (light-my-request), Vite/Vitest and the Inspector
+  need `require(esm)` / Node ≥ 22. Node 20 has been out of support since April 2026.
+- **Inspector pinned to 2.13.0:** 2.14 onwards requires Node ≥ 22.23.4.
 
-## Limitações e próximos passos
+## Limitations and next steps
 
-- Conversas do chat ficam em memória: reiniciar o `agenda-chat` zera o histórico.
-- Sem auth e sem multiusuário; transporte do MCP só em stdio.
-- O texto da resposta chega inteiro (streaming por token ainda não implementado).
+- Chat conversations live in memory: restarting `agenda-chat` wipes the history.
+- No auth and no multi-user; MCP transport is stdio only.
+- The answer text arrives all at once (per-token streaming is not implemented yet).
 
-**TODO: expor o MCP via HTTP com OAuth**
+**TODO: expose MCP over HTTP with OAuth**
 
-- **Transporte:** trocar `StdioServerTransport` por Streamable HTTP
-  (`StreamableHTTPServerTransport`) num endpoint `/mcp`; decidir entre stateless e sessões com
-  `Mcp-Session-Id`; validar `Origin` (DNS rebinding); servir só por HTTPS.
-- **OAuth 2.1 (spec de autorização do MCP):** o MCP server vira *resource server*; publicar
-  `/.well-known/oauth-protected-resource` (RFC 9728); responder `401` com `WWW-Authenticate`;
-  validar o bearer em cada request (assinatura, expiração, `aud`/resource indicator RFC 8707);
-  PKCE; registro de cliente via Client ID Metadata Documents ou Dynamic Client Registration.
-- **Escopos por tool:** `agenda:read` (listar/buscar/verificar) e `agenda:write`
-  (criar/atualizar/remover).
-- **Sem token passthrough:** não repassar o token do cliente MCP à API; usar token exchange ou
-  credencial própria, propagando a identidade do usuário.
-- **Multiusuário na API:** `owner_id` nos eventos, filtro por usuário em todas as queries.
-- **Operação:** rate limit, auditoria das tools destrutivas, health check, retries e deploy.
+- **Transport:** replace `StdioServerTransport` with Streamable HTTP
+  (`StreamableHTTPServerTransport`) on an `/mcp` endpoint; choose between stateless and sessions
+  with `Mcp-Session-Id`; validate `Origin` (DNS rebinding); serve over HTTPS only.
+- **OAuth 2.1 (MCP authorization spec):** the MCP server becomes a *resource server*; publish
+  `/.well-known/oauth-protected-resource` (RFC 9728); answer `401` with `WWW-Authenticate`;
+  validate the bearer on every request (signature, expiry, `aud`/resource indicator RFC 8707);
+  PKCE; client registration via Client ID Metadata Documents or Dynamic Client Registration.
+- **Per-tool scopes:** `agenda:read` (list/get/check) and `agenda:write`
+  (create/update/delete).
+- **No token passthrough:** do not forward the MCP client's token to the API; use token
+  exchange or a dedicated credential, propagating the user's identity.
+- **Multi-user API:** `owner_id` on events, filtered by user in every query.
+- **Operations:** rate limiting, auditing of destructive tools, health checks, retries and
+  deployment.

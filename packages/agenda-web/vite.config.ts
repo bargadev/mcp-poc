@@ -10,9 +10,9 @@ export default defineConfig({
     port: Number(process.env.WEB_PORT ?? 5174),
     strictPort: true,
     proxy: {
-      // O calendário lê a agenda-api direto, só para exibir.
+      // The calendar reads agenda-api directly, for display only.
       "/api": { target: API, rewrite: (p) => p.replace(/^\/api/, "") },
-      // Toda ação passa pelo chat (agenda-chat → OpenAI + MCP).
+      // Every action goes through the chat (agenda-chat → OpenAI + MCP).
       "/chat": { target: CHAT },
     },
   },

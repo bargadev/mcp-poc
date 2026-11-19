@@ -1,89 +1,85 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { DataHora, EventoSchema, FORMATO_DATA_EXEMPLO, type Evento } from "@agenda/api/schemas";
+import { DATE_FORMAT_EXAMPLE, DateTime, EventSchema, type Event } from "@agenda/api/schemas";
 import { z } from "zod";
 import { ApiError, type ApiClient } from "./api-client.js";
 
 // ---------------------------------------------------------------------------
-// Trechos reaproveitados nas descriptions (as descriptions são o "prompt" da tool)
+// Snippets reused across descriptions (descriptions are the tool's "prompt")
 // ---------------------------------------------------------------------------
 
-const FORMATO = `Datas SEMPRE em ISO 8601 com timezone, ex: ${FORMATO_DATA_EXEMPLO}. Nunca omita o offset; se o usuário não disser o fuso, use o fuso dele (Brasília = -03:00).`;
-const RELATIVAS = `Converta datas relativas ("amanhã", "sexta", "semana que vem") para datas absolutas a partir da data atual da conversa antes de chamar.`;
-const ID = `O id (UUID) de cada evento vem em toda resposta: guarde-o para buscar, atualizar ou remover depois.`;
+const FORMAT = `Dates ALWAYS in ISO 8601 with a timezone, e.g. ${DATE_FORMAT_EXAMPLE}. Never omit the offset; if the user does not state a timezone, use theirs (São Paulo = -03:00).`;
+const RELATIVE = `Convert relative dates ("tomorrow", "Friday", "next week") to absolute dates based on the conversation's current date before calling.`;
+const ID = `Every response includes each event's id (UUID): keep it to get, update or delete the event later.`;
 
-const descData = (o: string) => `${o}. ${FORMATO}`;
+const dateDesc = (o: string) => `${o}. ${FORMAT}`;
 
 // ---------------------------------------------------------------------------
-// Schemas de entrada/saída
+// Input/output schemas
 // ---------------------------------------------------------------------------
 
-const IdEvento = z
-  .uuid({ error: "id deve ser um UUID; use listar_eventos para descobrir o id do evento" })
-  .describe("id (UUID) do evento, obtido em listar_eventos, buscar_evento ou criar_evento");
+const EventId = z
+  .uuid({ error: "id must be a UUID; use list_events to find the event id" })
+  .describe("Event id (UUID), from list_events, get_event or create_event");
 
-const Intervalo = {
-  de: DataHora.describe(descData("Início do intervalo (inclusivo)")),
-  ate: DataHora.describe(descData("Fim do intervalo (exclusivo); deve ser depois de `de`")),
+const Range = {
+  from: DateTime.describe(dateDesc("Range start (inclusive)")),
+  to: DateTime.describe(dateDesc("Range end (exclusive); must be after `from`")),
 };
 
-const ResumoEvento = EventoSchema.pick({ id: true, titulo: true, inicio: true, fim: true });
+const EventSummary = EventSchema.pick({ id: true, title: true, start: true, end: true });
 
-const SaidaEvento = { evento: EventoSchema };
-const SaidaEventoComConflitos = {
-  evento: EventoSchema,
-  conflitos: z
-    .array(ResumoEvento)
-    .describe("Outros eventos que se sobrepõem ao horário deste. Vazio = sem conflito."),
+const EventOutput = { event: EventSchema };
+const EventWithConflictsOutput = {
+  event: EventSchema,
+  conflicts: z.array(EventSummary).describe("Other events overlapping this one. Empty = no conflict."),
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-type Dados = Record<string, unknown>;
+type Data = Record<string, unknown>;
 
-function sucesso(resumo: string, dados: Dados): CallToolResult {
+function ok(summary: string, data: Data): CallToolResult {
   return {
-    content: [{ type: "text", text: `${resumo}\n\n${JSON.stringify(dados, null, 2)}` }],
-    structuredContent: dados,
+    content: [{ type: "text", text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }],
+    structuredContent: data,
   };
 }
 
-function falha(mensagem: string): CallToolResult {
-  return { content: [{ type: "text", text: mensagem }], isError: true };
+function fail(message: string): CallToolResult {
+  return { content: [{ type: "text", text: message }], isError: true };
 }
 
-/** Converte qualquer erro em resposta isError com mensagem útil ao modelo (sem stack trace). */
-async function executar(fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
+/** Turns any error into an isError result with a message useful to the model (no stack trace). */
+async function run(fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
   try {
     return await fn();
   } catch (e) {
     if (e instanceof ApiError) {
-      if (e.status === 404 && e.message.startsWith("Evento não encontrado")) {
-        return falha(`${e.message}. Use listar_eventos para encontrar o id correto.`);
+      if (e.status === 404 && e.message.startsWith("Event not found")) {
+        return fail(`${e.message}. Use list_events to find the correct id.`);
       }
-      return falha(e.message);
+      return fail(e.message);
     }
-    console.error("[agenda-mcp] erro inesperado:", e);
-    return falha("Erro inesperado no servidor MCP de agenda. Tente novamente; se persistir, avise o usuário.");
+    console.error("[agenda-mcp] unexpected error:", e);
+    return fail("Unexpected error in the agenda MCP server. Try again; if it persists, tell the user.");
   }
 }
 
-const resumir = ({ id, titulo, inicio, fim }: Evento) => ({ id, titulo, inicio, fim });
+const summarize = ({ id, title, start, end }: Event) => ({ id, title, start, end });
 
-const linha = (e: Evento) => `- ${e.titulo} | ${e.inicio} → ${e.fim} | id ${e.id}`;
+const line = (e: Pick<Event, "id" | "title" | "start" | "end">) => `- ${e.title} | ${e.start} → ${e.end} | id ${e.id}`;
 
-async function conflitosDe(api: ApiClient, ev: Evento) {
-  const sobrepostos = await api.listar(ev.inicio, ev.fim);
-  return sobrepostos.filter((o) => o.id !== ev.id).map(resumir);
+async function conflictsOf(api: ApiClient, ev: Event) {
+  const overlapping = await api.list(ev.start, ev.end);
+  return overlapping.filter((o) => o.id !== ev.id).map(summarize);
 }
 
-function avisoConflitos(conflitos: ReturnType<typeof resumir>[]): string {
-  if (!conflitos.length) return "Sem conflitos de horário.";
-  return `ATENÇÃO: conflita com ${conflitos.length} evento(s):\n${conflitos
-    .map((c) => `- ${c.titulo} | ${c.inicio} → ${c.fim} | id ${c.id}`)
-    .join("\n")}\nInforme o usuário.`;
+function conflictWarning(conflicts: ReturnType<typeof summarize>[]): string {
+  if (!conflicts.length) return "No schedule conflicts.";
+  return `WARNING: conflicts with ${conflicts.length} event(s):\n${conflicts.map(line).join("\n")}\nTell the user.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,73 +88,73 @@ function avisoConflitos(conflitos: ReturnType<typeof resumir>[]): string {
 
 export function registerTools(server: McpServer, api: ApiClient): void {
   server.registerTool(
-    "listar_eventos",
+    "list_events",
     {
-      title: "Listar eventos",
+      title: "List events",
       description: [
-        "Lista os eventos da agenda que se sobrepõem a um intervalo de tempo (inclui eventos que começam antes e terminam dentro dele).",
-        `Use para perguntas como "o que tenho amanhã?", "como está minha semana?" e para descobrir o id de um evento antes de atualizar ou remover. Para um dia inteiro, use de = 00:00 do dia e ate = 00:00 do dia seguinte.`,
-        RELATIVAS,
-        FORMATO,
+        "Lists agenda events that overlap a time range (including events that start before it and end inside it).",
+        `Use for questions like "what do I have tomorrow?", "how does my week look?" and to find an event's id before updating or deleting it. For a whole day, use from = 00:00 of that day and to = 00:00 of the next day.`,
+        RELATIVE,
+        FORMAT,
         ID,
       ].join("\n"),
-      inputSchema: Intervalo,
+      inputSchema: Range,
       outputSchema: {
-        de: z.string(),
-        ate: z.string(),
+        from: z.string(),
+        to: z.string(),
         total: z.number().int(),
-        eventos: z.array(EventoSchema).describe("Ordenados por início"),
+        events: z.array(EventSchema).describe("Ordered by start"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ de, ate }) =>
-      executar(async () => {
-        const eventos = await api.listar(de, ate);
-        const resumo = eventos.length
-          ? `${eventos.length} evento(s) entre ${de} e ${ate}:\n${eventos.map(linha).join("\n")}`
-          : `Nenhum evento entre ${de} e ${ate}.`;
-        return sucesso(resumo, { de, ate, total: eventos.length, eventos });
+    ({ from, to }) =>
+      run(async () => {
+        const events = await api.list(from, to);
+        const summary = events.length
+          ? `${events.length} event(s) between ${from} and ${to}:\n${events.map(line).join("\n")}`
+          : `No events between ${from} and ${to}.`;
+        return ok(summary, { from, to, total: events.length, events });
       }),
   );
 
   server.registerTool(
-    "buscar_evento",
+    "get_event",
     {
-      title: "Buscar evento",
+      title: "Get event",
       description: [
-        "Retorna todos os dados de um evento pelo id, incluindo a descrição.",
-        "Use quando já tiver o id (de uma resposta anterior) e precisar dos detalhes. Se não tiver o id, use listar_eventos primeiro.",
+        "Returns all data of an event by id, including its description.",
+        "Use when you already have the id (from a previous response) and need the details. If you do not have the id, use list_events first.",
       ].join("\n"),
-      inputSchema: { id: IdEvento },
-      outputSchema: SaidaEvento,
+      inputSchema: { id: EventId },
+      outputSchema: EventOutput,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ id }) =>
-      executar(async () => {
-        const evento = await api.buscar(id);
-        return sucesso(`Evento encontrado:\n${linha(evento)}`, { evento });
+      run(async () => {
+        const event = await api.get(id);
+        return ok(`Event found:\n${line(event)}`, { event });
       }),
   );
 
   server.registerTool(
-    "criar_evento",
+    "create_event",
     {
-      title: "Criar evento",
+      title: "Create event",
       description: [
-        `Cria um evento na agenda. Use para pedidos como "marca reunião sexta 14h às 15h".`,
-        "Se o usuário não disser o horário de término, pergunte ou assuma 1 hora e avise.",
-        "Esta tool NÃO bloqueia sobreposição: o evento é criado mesmo se houver conflito, e os eventos conflitantes vêm no campo `conflitos`. Se não tiver certeza de que o horário está livre, chame verificar_disponibilidade antes e confirme com o usuário.",
-        RELATIVAS,
-        FORMATO,
+        `Creates an agenda event. Use for requests like "book a meeting Friday 2pm to 3pm".`,
+        "If the user does not give an end time, ask or assume 1 hour and say so.",
+        "This tool does NOT block overlaps: the event is created even when there is a conflict, and the conflicting events come back in `conflicts`. If you are not sure the slot is free, call check_availability first and confirm with the user.",
+        RELATIVE,
+        FORMAT,
         ID,
       ].join("\n"),
       inputSchema: {
-        titulo: z.string().min(1).max(200).describe("Título curto do evento, ex: \"Reunião com time de vendas\""),
-        inicio: DataHora.describe(descData("Início do evento")),
-        fim: DataHora.describe(descData("Fim do evento; deve ser depois de `inicio`")),
-        descricao: z.string().max(2000).optional().describe("Detalhes opcionais: pauta, local, link"),
+        title: z.string().min(1).max(200).describe('Short event title, e.g. "Meeting with the sales team"'),
+        start: DateTime.describe(dateDesc("Event start")),
+        end: DateTime.describe(dateDesc("Event end; must be after `start`")),
+        description: z.string().max(2000).optional().describe("Optional details: agenda, location, link"),
       },
-      outputSchema: SaidaEventoComConflitos,
+      outputSchema: EventWithConflictsOutput,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -167,35 +163,32 @@ export function registerTools(server: McpServer, api: ApiClient): void {
       },
     },
     (args) =>
-      executar(async () => {
-        const evento = await api.criar(args);
-        const conflitos = await conflitosDe(api, evento);
-        return sucesso(`Evento criado:\n${linha(evento)}\n${avisoConflitos(conflitos)}`, {
-          evento,
-          conflitos,
-        });
+      run(async () => {
+        const event = await api.create(args);
+        const conflicts = await conflictsOf(api, event);
+        return ok(`Event created:\n${line(event)}\n${conflictWarning(conflicts)}`, { event, conflicts });
       }),
   );
 
   server.registerTool(
-    "atualizar_evento",
+    "update_event",
     {
-      title: "Atualizar evento",
+      title: "Update event",
       description: [
-        "Altera campos de um evento existente. Envie só os campos que mudam; os demais são mantidos.",
-        "Use para remarcar, renomear ou mudar a descrição. Para remarcar mantendo a duração, envie `inicio` e `fim` juntos. `descricao: null` apaga a descrição.",
-        "Precisa do id: se não tiver, use listar_eventos antes. Não bloqueia sobreposição; conflitos vêm em `conflitos`.",
-        RELATIVAS,
-        FORMATO,
+        "Changes fields of an existing event. Send only the fields that change; the rest are kept.",
+        "Use to reschedule, rename or change the description. To reschedule keeping the duration, send `start` and `end` together. `description: null` clears the description.",
+        "Needs the id: if you do not have it, use list_events first. Does not block overlaps; conflicts come back in `conflicts`.",
+        RELATIVE,
+        FORMAT,
       ].join("\n"),
       inputSchema: {
-        id: IdEvento,
-        titulo: z.string().min(1).max(200).optional().describe("Novo título"),
-        inicio: DataHora.optional().describe(descData("Novo início")),
-        fim: DataHora.optional().describe(descData("Novo fim")),
-        descricao: z.string().max(2000).nullable().optional().describe("Nova descrição; null apaga"),
+        id: EventId,
+        title: z.string().min(1).max(200).optional().describe("New title"),
+        start: DateTime.optional().describe(dateDesc("New start")),
+        end: DateTime.optional().describe(dateDesc("New end")),
+        description: z.string().max(2000).nullable().optional().describe("New description; null clears it"),
       },
-      outputSchema: SaidaEventoComConflitos,
+      outputSchema: EventWithConflictsOutput,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -203,30 +196,27 @@ export function registerTools(server: McpServer, api: ApiClient): void {
         openWorldHint: false,
       },
     },
-    ({ id, ...campos }) =>
-      executar(async () => {
-        if (Object.values(campos).every((v) => v === undefined)) {
-          return falha("Informe ao menos um campo para atualizar: titulo, inicio, fim ou descricao.");
+    ({ id, ...fields }) =>
+      run(async () => {
+        if (Object.values(fields).every((v) => v === undefined)) {
+          return fail("Provide at least one field to update: title, start, end or description.");
         }
-        const evento = await api.atualizar(id, campos);
-        const conflitos = await conflitosDe(api, evento);
-        return sucesso(`Evento atualizado:\n${linha(evento)}\n${avisoConflitos(conflitos)}`, {
-          evento,
-          conflitos,
-        });
+        const event = await api.update(id, fields);
+        const conflicts = await conflictsOf(api, event);
+        return ok(`Event updated:\n${line(event)}\n${conflictWarning(conflicts)}`, { event, conflicts });
       }),
   );
 
   server.registerTool(
-    "remover_evento",
+    "delete_event",
     {
-      title: "Remover evento",
+      title: "Delete event",
       description: [
-        `Remove (cancela) um evento permanentemente. Não há como desfazer. Use para pedidos como "cancela o evento de quinta".`,
-        "Precisa do id: use listar_eventos para encontrá-lo. Se mais de um evento puder corresponder ao pedido, pergunte ao usuário qual antes de remover.",
+        `Deletes (cancels) an event permanently. It cannot be undone. Use for requests like "cancel Thursday's event".`,
+        "Needs the id: use list_events to find it. If more than one event could match the request, ask the user which one before deleting.",
       ].join("\n"),
-      inputSchema: { id: IdEvento },
-      outputSchema: { removido: z.literal(true), evento: EventoSchema.describe("Dados do evento removido") },
+      inputSchema: { id: EventId },
+      outputSchema: { deleted: z.literal(true), event: EventSchema.describe("Data of the deleted event") },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -235,43 +225,41 @@ export function registerTools(server: McpServer, api: ApiClient): void {
       },
     },
     ({ id }) =>
-      executar(async () => {
-        const evento = await api.buscar(id);
-        await api.remover(id);
-        return sucesso(`Evento removido:\n${linha(evento)}`, { removido: true, evento });
+      run(async () => {
+        const event = await api.get(id);
+        await api.delete(id);
+        return ok(`Event deleted:\n${line(event)}`, { deleted: true, event });
       }),
   );
 
   server.registerTool(
-    "verificar_disponibilidade",
+    "check_availability",
     {
-      title: "Verificar disponibilidade",
+      title: "Check availability",
       description: [
-        "Verifica se um intervalo de tempo está livre na agenda e lista os eventos que conflitam, se houver.",
-        `Use antes de criar ou remarcar um evento e para perguntas como "estou livre sexta às 14h?".`,
-        "Eventos que apenas encostam na borda (um termina às 15h, outro começa às 15h) NÃO conflitam.",
-        RELATIVAS,
-        FORMATO,
+        "Checks whether a time range is free in the agenda and lists the conflicting events, if any.",
+        `Use before creating or rescheduling an event and for questions like "am I free Friday at 2pm?".`,
+        "Events that only touch at the edge (one ends at 3pm, another starts at 3pm) do NOT conflict.",
+        RELATIVE,
+        FORMAT,
       ].join("\n"),
-      inputSchema: Intervalo,
+      inputSchema: Range,
       outputSchema: {
-        livre: z.boolean(),
-        de: z.string(),
-        ate: z.string(),
-        conflitos: z.array(ResumoEvento),
+        free: z.boolean(),
+        from: z.string(),
+        to: z.string(),
+        conflicts: z.array(EventSummary),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ de, ate }) =>
-      executar(async () => {
-        const conflitos = (await api.listar(de, ate)).map(resumir);
-        const livre = conflitos.length === 0;
-        const resumo = livre
-          ? `Livre: nenhum evento entre ${de} e ${ate}.`
-          : `Ocupado: ${conflitos.length} conflito(s) entre ${de} e ${ate}:\n${conflitos
-              .map((c) => `- ${c.titulo} | ${c.inicio} → ${c.fim} | id ${c.id}`)
-              .join("\n")}`;
-        return sucesso(resumo, { livre, de, ate, conflitos });
+    ({ from, to }) =>
+      run(async () => {
+        const conflicts = (await api.list(from, to)).map(summarize);
+        const free = conflicts.length === 0;
+        const summary = free
+          ? `Free: no events between ${from} and ${to}.`
+          : `Busy: ${conflicts.length} conflict(s) between ${from} and ${to}:\n${conflicts.map(line).join("\n")}`;
+        return ok(summary, { free, from, to, conflicts });
       }),
   );
 }

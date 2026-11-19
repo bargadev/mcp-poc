@@ -1,143 +1,140 @@
 import Fastify, { type FastifyReply, type FastifyServerOptions } from "fastify";
 import type { z } from "zod";
 import type { Db } from "./db.js";
-import { criarRepositorio } from "./repositorio.js";
+import { createRepository } from "./repository.js";
 import {
-  AtualizarEventoSchema,
-  CriarEventoSchema,
-  CriarEventosLoteSchema,
-  RemoverEventosLoteSchema,
-  type ErroApi,
-  fimDepoisDeInicio,
+  type ApiErrorBody,
+  CreateEventSchema,
+  CreateEventsBatchSchema,
+  DeleteEventsBatchSchema,
+  endsAfterStart,
   IdParamSchema,
-  IntervaloQuerySchema,
-  MSG_FIM_ANTES_INICIO,
+  MSG_END_BEFORE_START,
+  RangeQuerySchema,
+  UpdateEventSchema,
 } from "./schemas.js";
 
-type Detalhe = NonNullable<ErroApi["detalhes"]>[number];
+type Detail = NonNullable<ApiErrorBody["details"]>[number];
 
-function detalhesDoZod(error: z.ZodError): Detalhe[] {
+function zodDetails(error: z.ZodError): Detail[] {
   return error.issues.map((iss) => {
-    const campo = iss.path.length ? iss.path.join(".") : "(corpo)";
+    const field = iss.path.length ? iss.path.join(".") : "(body)";
     if (iss.code === "unrecognized_keys") {
-      return { campo, mensagem: `campo(s) desconhecido(s): ${iss.keys.join(", ")}` };
+      return { field, message: `unknown field(s): ${iss.keys.join(", ")}` };
     }
-    return { campo, mensagem: iss.message };
+    return { field, message: iss.message };
   });
 }
 
-function responderInvalido(reply: FastifyReply, detalhes: Detalhe[]) {
-  const resumo = detalhes.map((d) => `${d.campo}: ${d.mensagem}`).join("; ");
-  const corpo: ErroApi = { erro: `Dados inválidos — ${resumo}`, detalhes };
-  return reply.code(400).send(corpo);
+function replyInvalid(reply: FastifyReply, details: Detail[]) {
+  const summary = details.map((d) => `${d.field}: ${d.message}`).join("; ");
+  const body: ApiErrorBody = { error: `Invalid data — ${summary}`, details };
+  return reply.code(400).send(body);
 }
 
-function naoEncontrado(reply: FastifyReply, id: string) {
-  const corpo: ErroApi = { erro: `Evento não encontrado com id ${id}` };
-  return reply.code(404).send(corpo);
+function notFound(reply: FastifyReply, id: string) {
+  const body: ApiErrorBody = { error: `Event not found with id ${id}` };
+  return reply.code(404).send(body);
 }
 
-/** Valida com Zod; em caso de erro já responde 400 e retorna undefined. */
-function validar<S extends z.ZodType>(schema: S, dados: unknown, reply: FastifyReply): z.infer<S> | undefined {
-  const r = schema.safeParse(dados);
+/** Validates with Zod; on failure it already replies 400 and returns undefined. */
+function validate<S extends z.ZodType>(schema: S, data: unknown, reply: FastifyReply): z.infer<S> | undefined {
+  const r = schema.safeParse(data);
   if (r.success) return r.data;
-  void responderInvalido(reply, detalhesDoZod(r.error));
+  void replyInvalid(reply, zodDetails(r.error));
   return undefined;
 }
 
-export interface OpcoesApp {
+export interface AppOptions {
   db: Db;
   logger?: FastifyServerOptions["logger"];
 }
 
-export function buildApp({ db, logger = false }: OpcoesApp) {
+export function buildApp({ db, logger = false }: AppOptions) {
   const app = Fastify({ logger });
-  const repo = criarRepositorio(db);
+  const repo = createRepository(db);
 
   app.setErrorHandler((err: { statusCode?: number; message: string }, req, reply) => {
     const status = err.statusCode ?? 500;
     if (status >= 500) {
       req.log.error(err);
-      const corpo: ErroApi = { erro: "Erro interno na API de agenda" };
-      return reply.code(500).send(corpo);
+      const body: ApiErrorBody = { error: "Internal error in the agenda API" };
+      return reply.code(500).send(body);
     }
-    // Erros do próprio Fastify (JSON malformado, content-type, body vazio etc.)
-    const corpo: ErroApi = { erro: `Requisição inválida — ${err.message}` };
-    return reply.code(status).send(corpo);
+    // Fastify's own errors (malformed JSON, content-type, empty body, etc.)
+    const body: ApiErrorBody = { error: `Invalid request — ${err.message}` };
+    return reply.code(status).send(body);
   });
 
   app.setNotFoundHandler((req, reply) => {
-    const corpo: ErroApi = { erro: `Rota não encontrada: ${req.method} ${req.url}` };
-    return reply.code(404).send(corpo);
+    const body: ApiErrorBody = { error: `Route not found: ${req.method} ${req.url}` };
+    return reply.code(404).send(body);
   });
 
-  app.get("/eventos", (req, reply) => {
-    const q = validar(IntervaloQuerySchema, req.query, reply);
+  app.get("/events", (req, reply) => {
+    const q = validate(RangeQuerySchema, req.query, reply);
     if (!q) return reply;
-    return repo.listar(q);
+    return repo.list(q);
   });
 
-  app.get("/eventos/:id", (req, reply) => {
-    const p = validar(IdParamSchema, req.params, reply);
+  app.get("/events/:id", (req, reply) => {
+    const p = validate(IdParamSchema, req.params, reply);
     if (!p) return reply;
-    return repo.buscar(p.id) ?? naoEncontrado(reply, p.id);
+    return repo.get(p.id) ?? notFound(reply, p.id);
   });
 
-  app.post("/eventos", (req, reply) => {
-    const dados = validar(CriarEventoSchema, req.body, reply);
-    if (!dados) return reply;
-    return reply.code(201).send(repo.criar(dados));
+  app.post("/events", (req, reply) => {
+    const data = validate(CreateEventSchema, req.body, reply);
+    if (!data) return reply;
+    return reply.code(201).send(repo.create(data));
   });
 
-  app.patch("/eventos/:id", (req, reply) => {
-    const p = validar(IdParamSchema, req.params, reply);
+  app.patch("/events/:id", (req, reply) => {
+    const p = validate(IdParamSchema, req.params, reply);
     if (!p) return reply;
-    const patch = validar(AtualizarEventoSchema, req.body, reply);
+    const patch = validate(UpdateEventSchema, req.body, reply);
     if (!patch) return reply;
 
-    const atual = repo.buscar(p.id);
-    if (!atual) return naoEncontrado(reply, p.id);
+    const current = repo.get(p.id);
+    if (!current) return notFound(reply, p.id);
 
-    const novo = {
-      titulo: patch.titulo ?? atual.titulo,
-      descricao: patch.descricao === undefined ? atual.descricao : patch.descricao,
-      inicio: patch.inicio ?? atual.inicio,
-      fim: patch.fim ?? atual.fim,
+    const next = {
+      title: patch.title ?? current.title,
+      description: patch.description === undefined ? current.description : patch.description,
+      start: patch.start ?? current.start,
+      end: patch.end ?? current.end,
     };
-    if (!fimDepoisDeInicio(novo.inicio, novo.fim)) {
-      return responderInvalido(reply, [
-        {
-          campo: "fim",
-          mensagem: `${MSG_FIM_ANTES_INICIO} (resultado: inicio=${novo.inicio}, fim=${novo.fim})`,
-        },
+    if (!endsAfterStart(next.start, next.end)) {
+      return replyInvalid(reply, [
+        { field: "end", message: `${MSG_END_BEFORE_START} (result: start=${next.start}, end=${next.end})` },
       ]);
     }
-    return repo.atualizar(p.id, novo);
+    return repo.update(p.id, next);
   });
 
-  app.post("/eventos/lote", (req, reply) => {
-    const dados = validar(CriarEventosLoteSchema, req.body, reply);
-    if (!dados) return reply;
-    return reply.code(201).send({ eventos: repo.criarVarios(dados.eventos) });
+  app.post("/events/batch", (req, reply) => {
+    const data = validate(CreateEventsBatchSchema, req.body, reply);
+    if (!data) return reply;
+    return reply.code(201).send({ events: repo.createMany(data.events) });
   });
 
-  app.post("/eventos/lote/remover", (req, reply) => {
-    const dados = validar(RemoverEventosLoteSchema, req.body, reply);
-    if (!dados) return reply;
-    const faltando = repo.inexistentes(dados.ids);
-    if (faltando.length) {
-      const corpo: ErroApi = {
-        erro: `Nenhum evento foi removido: ${faltando.length} id(s) não encontrado(s): ${faltando.join(", ")}`,
+  app.post("/events/batch/delete", (req, reply) => {
+    const data = validate(DeleteEventsBatchSchema, req.body, reply);
+    if (!data) return reply;
+    const missing = repo.missing(data.ids);
+    if (missing.length) {
+      const body: ApiErrorBody = {
+        error: `No events were deleted: ${missing.length} id(s) not found: ${missing.join(", ")}`,
       };
-      return reply.code(404).send(corpo);
+      return reply.code(404).send(body);
     }
-    return { removidos: repo.removerVarios(dados.ids) };
+    return { deleted: repo.deleteMany(data.ids) };
   });
 
-  app.delete("/eventos/:id", (req, reply) => {
-    const p = validar(IdParamSchema, req.params, reply);
+  app.delete("/events/:id", (req, reply) => {
+    const p = validate(IdParamSchema, req.params, reply);
     if (!p) return reply;
-    return repo.remover(p.id) ? reply.code(204).send() : naoEncontrado(reply, p.id);
+    return repo.delete(p.id) ? reply.code(204).send() : notFound(reply, p.id);
   });
 
   return app;

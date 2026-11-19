@@ -1,69 +1,67 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calendario, type CalendarioHandle } from "./Calendario.tsx";
+import { Calendar, type CalendarHandle } from "./Calendar.tsx";
 import { Chat } from "./Chat.tsx";
-import { dia, hora, intervalo } from "./datas.ts";
+import { day, range, time } from "./dates.ts";
 
-type Status = { estado: "carregando" } | { estado: "ok"; modelo?: string } | { estado: "offline" };
+type Status = { state: "loading" } | { state: "ok"; model?: string } | { state: "offline" };
 
 export function App() {
-  const cal = useRef<CalendarioHandle>(null);
-  const [destaque, setDestaque] = useState<string>();
-  const [prefill, setPrefill] = useState<{ texto: string; n: number }>();
-  const [status, setStatus] = useState<Status>({ estado: "carregando" });
-  const limparDestaque = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const cal = useRef<CalendarHandle>(null);
+  const [highlight, setHighlight] = useState<string>();
+  const [prefill, setPrefill] = useState<{ text: string; n: number }>();
+  const [status, setStatus] = useState<Status>({ state: "loading" });
+  const clearHighlight = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    let vivo = true;
-    const checar = () =>
+    let alive = true;
+    const check = () =>
       fetch("/chat/health")
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
-        .then((j: { modelo?: string }) => vivo && setStatus({ estado: "ok", modelo: j.modelo }))
-        .catch(() => vivo && setStatus({ estado: "offline" }));
-    void checar();
-    const t = setInterval(checar, 10_000);
+        .then((j: { model?: string }) => alive && setStatus({ state: "ok", model: j.model }))
+        .catch(() => alive && setStatus({ state: "offline" }));
+    void check();
+    const t = setInterval(check, 10_000);
     return () => {
-      vivo = false;
+      alive = false;
       clearInterval(t);
     };
   }, []);
 
-  const aoMutar = useCallback((_nome: string, dados: Record<string, unknown> | undefined) => {
-    const ev = dados?.evento as { id: string; inicio: string } | undefined;
-    if (ev && _nome !== "remover_evento") {
-      setDestaque(ev.id);
-      cal.current?.irPara(ev.inicio);
-      clearTimeout(limparDestaque.current);
-      limparDestaque.current = setTimeout(() => setDestaque(undefined), 6000);
+  const onMutation = useCallback((name: string, data: Record<string, unknown> | undefined) => {
+    const ev = data?.event as { id: string; start: string } | undefined;
+    if (ev && name !== "delete_event") {
+      setHighlight(ev.id);
+      cal.current?.goTo(ev.start);
+      clearTimeout(clearHighlight.current);
+      clearHighlight.current = setTimeout(() => setHighlight(undefined), 6000);
     }
-    cal.current?.recarregar();
+    cal.current?.reload();
   }, []);
 
-  const preencher = (texto: string) => setPrefill((p) => ({ texto, n: (p?.n ?? 0) + 1 }));
+  const fill = (text: string) => setPrefill((p) => ({ text, n: (p?.n ?? 0) + 1 }));
 
   return (
     <div className="app">
-      <header className="topo">
-        <div className="marca">
-          <span className="marca-icone" aria-hidden="true" />
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-icon" aria-hidden="true" />
           <h1>Agenda</h1>
         </div>
-        <div className={`status ${status.estado}`}>
-          <span className="ponto" aria-hidden="true" />
-          {status.estado === "ok" && <>assistente via MCP · {status.modelo ?? "OpenAI"}</>}
-          {status.estado === "offline" && <>assistente offline — rode pnpm dev:chat</>}
-          {status.estado === "carregando" && <>conectando…</>}
+        <div className={`status ${status.state}`}>
+          <span className="dot" aria-hidden="true" />
+          {status.state === "ok" && <>assistant via MCP · {status.model ?? "OpenAI"}</>}
+          {status.state === "offline" && <>assistant offline — run pnpm dev:chat</>}
+          {status.state === "loading" && <>connecting…</>}
         </div>
       </header>
-      <main className="corpo">
-        <Calendario
+      <main className="main-grid">
+        <Calendar
           ref={cal}
-          destaque={destaque}
-          onSelecionarIntervalo={(inicio, fim) =>
-            preencher(`Marca um evento ${dia(inicio)} das ${hora(inicio)} às ${hora(fim)}: `)
-          }
-          onClicarEvento={(ev) => preencher(`Sobre “${ev.titulo}” (${intervalo(ev.inicio, ev.fim)}): `)}
+          highlight={highlight}
+          onSelectRange={(start, end) => fill(`Book an event on ${day(start)} from ${time(start)} to ${time(end)}: `)}
+          onEventClick={(ev) => fill(`About “${ev.title}” (${range(ev.start, ev.end)}): `)}
         />
-        <Chat prefill={prefill} onMutacao={aoMutar} />
+        <Chat prefill={prefill} onMutation={onMutation} />
       </main>
     </div>
   );

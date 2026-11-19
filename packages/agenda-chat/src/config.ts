@@ -3,39 +3,37 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
-export const RAIZ = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
-// .env da raiz do monorepo (opcional, gitignored).
-const envRaiz = resolve(RAIZ, ".env");
-if (existsSync(envRaiz)) process.loadEnvFile(envRaiz);
+// Monorepo root .env (optional, gitignored).
+const rootEnv = resolve(ROOT, ".env");
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 /**
- * OPENAI_API_KEY vem do ambiente ou, se ausente, de OPENAI_ENV_FILE (o .env de outro
- * projeto). Desse arquivo só a OPENAI_API_KEY é lida; o resto é ignorado.
+ * OPENAI_API_KEY comes from the environment or, if missing, from OPENAI_ENV_FILE (another
+ * project's .env). Only OPENAI_API_KEY is read from that file; everything else is ignored.
  */
-function chaveOpenAI(): string {
+function openaiKey(): string {
   if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
-  const arquivo = process.env.OPENAI_ENV_FILE;
-  if (arquivo) {
-    if (!existsSync(arquivo)) throw new Error(`OPENAI_ENV_FILE aponta para um arquivo inexistente: ${arquivo}`);
-    const chave = parseEnv(readFileSync(arquivo, "utf8")).OPENAI_API_KEY;
-    if (chave) return chave;
-    throw new Error(`OPENAI_ENV_FILE (${arquivo}) não define OPENAI_API_KEY`);
+  const file = process.env.OPENAI_ENV_FILE;
+  if (file) {
+    if (!existsSync(file)) throw new Error(`OPENAI_ENV_FILE points to a file that does not exist: ${file}`);
+    const key = parseEnv(readFileSync(file, "utf8")).OPENAI_API_KEY;
+    if (key) return key;
+    throw new Error(`OPENAI_ENV_FILE (${file}) does not define OPENAI_API_KEY`);
   }
-  throw new Error(
-    "Defina OPENAI_API_KEY ou OPENAI_ENV_FILE (caminho de um .env que contenha OPENAI_API_KEY). Ver .env.example.",
-  );
+  throw new Error("Set OPENAI_API_KEY or OPENAI_ENV_FILE (path to a .env containing OPENAI_API_KEY). See .env.example.");
 }
 
-const esforcos = ["minimal", "low", "medium", "high"] as const;
-type Esforco = (typeof esforcos)[number];
-const esforcoEnv = process.env.OPENAI_REASONING_EFFORT;
+const efforts = ["minimal", "low", "medium", "high"] as const;
+type Effort = (typeof efforts)[number];
+const effortEnv = process.env.OPENAI_REASONING_EFFORT;
 
 export const config = {
-  porta: Number(process.env.CHAT_PORT ?? 3003),
+  port: Number(process.env.CHAT_PORT ?? 3003),
   host: process.env.CHAT_HOST ?? "127.0.0.1",
   apiUrl: process.env.AGENDA_API_URL ?? "http://localhost:3002",
-  modelo: process.env.OPENAI_MODEL ?? "gpt-5.5",
-  esforco: (esforcos as readonly string[]).includes(esforcoEnv ?? "") ? (esforcoEnv as Esforco) : ("low" as Esforco),
-  chaveOpenAI,
+  model: process.env.OPENAI_MODEL ?? "gpt-5.5",
+  effort: (efforts as readonly string[]).includes(effortEnv ?? "") ? (effortEnv as Effort) : ("low" as Effort),
+  openaiKey,
 };

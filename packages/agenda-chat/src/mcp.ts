@@ -1,17 +1,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { resolve } from "node:path";
-import { RAIZ } from "./config.js";
+import { ROOT } from "./config.js";
 
 /**
- * Sobe o agenda-mcp como subprocesso (stdio), no mesmo Node, exatamente como o
- * Claude Code ou o Inspector fariam.
+ * Spawns agenda-mcp as a subprocess (stdio), on the same Node, exactly like
+ * Claude Code or the Inspector would.
  */
-export async function conectarMcp(apiUrl: string): Promise<Client> {
+export async function connectMcp(apiUrl: string): Promise<Client> {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ["--import", "tsx", resolve(RAIZ, "packages/agenda-mcp/src/index.ts")],
-    cwd: RAIZ,
+    args: ["--import", "tsx", resolve(ROOT, "packages/agenda-mcp/src/index.ts")],
+    cwd: ROOT,
     env: { ...(process.env as Record<string, string>), AGENDA_API_URL: apiUrl },
     stderr: "inherit",
   });

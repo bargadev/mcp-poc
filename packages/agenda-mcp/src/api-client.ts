@@ -1,24 +1,24 @@
-import type { AtualizarEvento, CriarEvento, ErroApi, Evento } from "@agenda/api/schemas";
+import type { ApiErrorBody, CreateEvent, Event, UpdateEvent } from "@agenda/api/schemas";
 
-/** Erro com mensagem já pronta para ser mostrada ao modelo. */
+/** Error whose message is ready to be shown to the model. */
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly status?: number,
-    readonly detalhes?: ErroApi["detalhes"],
+    readonly details?: ApiErrorBody["details"],
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
 
-export interface OpcoesApiClient {
+export interface ApiClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
 }
 
-export function criarApiClient({ baseUrl, fetch: f = fetch, timeoutMs = 10_000 }: OpcoesApiClient) {
+export function createApiClient({ baseUrl, fetch: f = fetch, timeoutMs = 10_000 }: ApiClientOptions) {
   const base = baseUrl.replace(/\/+$/, "");
 
   async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -32,56 +32,56 @@ export function criarApiClient({ baseUrl, fetch: f = fetch, timeoutMs = 10_000 }
       });
     } catch {
       throw new ApiError(
-        `Não foi possível conectar à API de agenda em ${base}. Verifique se ela está rodando (pnpm dev:api) e se AGENDA_API_URL está correta.`,
+        `Could not connect to the agenda API at ${base}. Check that it is running (pnpm dev:api) and that AGENDA_API_URL is correct.`,
       );
     }
 
     if (res.status === 204) return undefined as T;
 
-    const texto = await res.text();
+    const text = await res.text();
     let json: unknown;
     try {
-      json = texto ? JSON.parse(texto) : undefined;
+      json = text ? JSON.parse(text) : undefined;
     } catch {
       json = undefined;
     }
 
     if (!res.ok) {
-      const erro = (json as Partial<ErroApi> | undefined)?.erro;
+      const body = json as Partial<ApiErrorBody> | undefined;
       throw new ApiError(
-        erro ??
-          `A API em ${base} respondeu ${res.status} para ${method} ${path} sem mensagem de erro. Verifique se AGENDA_API_URL aponta para a API de agenda.`,
+        body?.error ??
+          `The API at ${base} responded ${res.status} to ${method} ${path} without an error message. Check that AGENDA_API_URL points to the agenda API.`,
         res.status,
-        (json as Partial<ErroApi> | undefined)?.detalhes,
+        body?.details,
       );
     }
     return json as T;
   }
 
   return {
-    listar(de: string, ate: string): Promise<Evento[]> {
-      const q = new URLSearchParams({ de, ate });
-      return req("GET", `/eventos?${q}`);
+    list(from: string, to: string): Promise<Event[]> {
+      const q = new URLSearchParams({ from, to });
+      return req("GET", `/events?${q}`);
     },
-    buscar(id: string): Promise<Evento> {
-      return req("GET", `/eventos/${encodeURIComponent(id)}`);
+    get(id: string): Promise<Event> {
+      return req("GET", `/events/${encodeURIComponent(id)}`);
     },
-    criar(dados: CriarEvento): Promise<Evento> {
-      return req("POST", "/eventos", dados);
+    create(data: CreateEvent): Promise<Event> {
+      return req("POST", "/events", data);
     },
-    atualizar(id: string, dados: AtualizarEvento): Promise<Evento> {
-      return req("PATCH", `/eventos/${encodeURIComponent(id)}`, dados);
+    update(id: string, data: UpdateEvent): Promise<Event> {
+      return req("PATCH", `/events/${encodeURIComponent(id)}`, data);
     },
-    remover(id: string): Promise<void> {
-      return req("DELETE", `/eventos/${encodeURIComponent(id)}`);
+    delete(id: string): Promise<void> {
+      return req("DELETE", `/events/${encodeURIComponent(id)}`);
     },
-    criarVarios(eventos: CriarEvento[]): Promise<{ eventos: Evento[] }> {
-      return req("POST", "/eventos/lote", { eventos });
+    createMany(events: CreateEvent[]): Promise<{ events: Event[] }> {
+      return req("POST", "/events/batch", { events });
     },
-    removerVarios(ids: string[]): Promise<{ removidos: number }> {
-      return req("POST", "/eventos/lote/remover", { ids });
+    deleteMany(ids: string[]): Promise<{ deleted: number }> {
+      return req("POST", "/events/batch/delete", { ids });
     },
   };
 }
 
-export type ApiClient = ReturnType<typeof criarApiClient>;
+export type ApiClient = ReturnType<typeof createApiClient>;

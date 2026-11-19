@@ -1,45 +1,45 @@
 import Fastify, { type FastifyReply } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { Agente, Conversa } from "./agente.js";
-import type { ContextoUsuario, EventoChat } from "./eventos.js";
+import type { Agent, Conversation } from "./agent.js";
+import type { ChatEvent, UserContext } from "./events.js";
 
-const Contexto = {
-  agora: z.string().min(10),
-  fuso: z.string().min(1).default("America/Sao_Paulo"),
+const Context = {
+  now: z.string().min(10),
+  timeZone: z.string().min(1).default("America/Sao_Paulo"),
 };
-const MensagemSchema = z.object({
-  conversaId: z.string().optional(),
-  texto: z.string().trim().min(1).max(4000),
-  ...Contexto,
+const MessageSchema = z.object({
+  conversationId: z.string().optional(),
+  text: z.string().trim().min(1).max(4000),
+  ...Context,
 });
-const ConfirmacaoSchema = z.object({
-  conversaId: z.string(),
+const ConfirmationSchema = z.object({
+  conversationId: z.string(),
   callId: z.string(),
-  aprovado: z.boolean(),
-  ...Contexto,
+  approved: z.boolean(),
+  ...Context,
 });
 
-/** Mensagem segura para o usuário: nunca stack trace. */
-function mensagemDeErro(e: unknown): string {
+/** User-safe message: never a stack trace. */
+function errorMessage(e: unknown): string {
   const err = e as { status?: number; message?: string; name?: string };
-  if (err?.status === 401) return "A chave da OpenAI foi recusada (401). Verifique OPENAI_API_KEY / OPENAI_ENV_FILE.";
-  if (err?.status === 429) return "Limite da OpenAI atingido (429). Espere um pouco e tente de novo.";
-  if (err?.status) return `A OpenAI respondeu ${err.status}: ${err.message ?? "erro desconhecido"}`;
-  return `Erro no servidor de chat: ${err?.message ?? String(e)}`;
+  if (err?.status === 401) return "The OpenAI key was rejected (401). Check OPENAI_API_KEY / OPENAI_ENV_FILE.";
+  if (err?.status === 429) return "OpenAI rate limit reached (429). Wait a bit and try again.";
+  if (err?.status) return `OpenAI responded ${err.status}: ${err.message ?? "unknown error"}`;
+  return `Chat server error: ${err?.message ?? String(e)}`;
 }
 
-export function buildChatApp({ agente, modelo }: { agente: Agente; modelo?: string }) {
+export function buildChatApp({ agent, model }: { agent: Agent; model?: string }) {
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
-  const conversas = new Map<string, Conversa>();
-  const ocupadas = new Set<string>();
+  const conversations = new Map<string, Conversation>();
+  const busy = new Set<string>();
 
-  /** Abre um stream SSE, roda `fn` emitindo eventos e fecha com `fim`. */
-  async function stream(reply: FastifyReply, conv: Conversa, fn: (emitir: (e: EventoChat) => void) => Promise<void>) {
-    if (ocupadas.has(conv.id)) {
-      return reply.code(409).send({ erro: "Esta conversa ainda está processando a mensagem anterior." });
+  /** Opens an SSE stream, runs `fn` emitting events and closes with `done`. */
+  async function stream(reply: FastifyReply, conv: Conversation, fn: (emit: (e: ChatEvent) => void) => Promise<void>) {
+    if (busy.has(conv.id)) {
+      return reply.code(409).send({ error: "This conversation is still processing the previous message." });
     }
-    ocupadas.add(conv.id);
+    busy.add(conv.id);
     reply.hijack();
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -47,48 +47,48 @@ export function buildChatApp({ agente, modelo }: { agente: Agente; modelo?: stri
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
-    const emitir = (e: EventoChat) => {
+    const emit = (e: ChatEvent) => {
       if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
     };
-    emitir({ tipo: "inicio", conversaId: conv.id });
+    emit({ type: "start", conversationId: conv.id });
     try {
-      await fn(emitir);
+      await fn(emit);
     } catch (e) {
       app.log.error(e);
-      emitir({ tipo: "erro", mensagem: mensagemDeErro(e) });
+      emit({ type: "error", message: errorMessage(e) });
     } finally {
-      ocupadas.delete(conv.id);
-      emitir({ tipo: "fim" });
+      busy.delete(conv.id);
+      emit({ type: "done" });
       reply.raw.end();
     }
   }
 
-  function invalido(reply: FastifyReply, error: z.ZodError) {
-    return reply.code(400).send({ erro: z.prettifyError(error) });
+  function invalid(reply: FastifyReply, error: z.ZodError) {
+    return reply.code(400).send({ error: z.prettifyError(error) });
   }
 
-  app.get("/chat/health", () => ({ ok: true, modelo }));
+  app.get("/chat/health", () => ({ ok: true, model }));
 
   app.post("/chat", async (req, reply) => {
-    const r = MensagemSchema.safeParse(req.body);
-    if (!r.success) return invalido(reply, r.error);
-    const { conversaId, texto, ...ctx } = r.data;
-    let conv = conversaId ? conversas.get(conversaId) : undefined;
+    const r = MessageSchema.safeParse(req.body);
+    if (!r.success) return invalid(reply, r.error);
+    const { conversationId, text, ...ctx } = r.data;
+    let conv = conversationId ? conversations.get(conversationId) : undefined;
     if (!conv) {
-      conv = { id: randomUUID(), itens: [] };
-      conversas.set(conv.id, conv);
+      conv = { id: randomUUID(), items: [] };
+      conversations.set(conv.id, conv);
     }
     const c = conv;
-    return stream(reply, c, (emitir) => agente.enviarMensagem(c, texto, ctx as ContextoUsuario, emitir));
+    return stream(reply, c, (emit) => agent.sendMessage(c, text, ctx as UserContext, emit));
   });
 
-  app.post("/chat/confirmar", async (req, reply) => {
-    const r = ConfirmacaoSchema.safeParse(req.body);
-    if (!r.success) return invalido(reply, r.error);
-    const { conversaId, callId, aprovado, ...ctx } = r.data;
-    const conv = conversas.get(conversaId);
-    if (!conv) return reply.code(404).send({ erro: "Conversa não encontrada (o servidor de chat foi reiniciado?)." });
-    return stream(reply, conv, (emitir) => agente.confirmar(conv, callId, aprovado, ctx as ContextoUsuario, emitir));
+  app.post("/chat/confirm", async (req, reply) => {
+    const r = ConfirmationSchema.safeParse(req.body);
+    if (!r.success) return invalid(reply, r.error);
+    const { conversationId, callId, approved, ...ctx } = r.data;
+    const conv = conversations.get(conversationId);
+    if (!conv) return reply.code(404).send({ error: "Conversation not found (was the chat server restarted?)." });
+    return stream(reply, conv, (emit) => agent.confirm(conv, callId, approved, ctx as UserContext, emit));
   });
 
   return app;

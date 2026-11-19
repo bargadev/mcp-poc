@@ -24,5 +24,5 @@
     "typescript": "7.0.2",
     "vitest": "5.1.1"
   },
-  "description": "POC: API REST de agenda exposta como MCP server, com frontend de calendário + chat que executa ações via tools"
+  "description": "POC: an agenda REST API exposed as an MCP server, with a calendar + chat frontend that runs actions through tools"
 }
