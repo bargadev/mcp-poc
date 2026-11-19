@@ -1,0 +1,28 @@
+{
+  "name": "mcp-poc",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @agenda/api --filter @agenda/chat --filter @agenda/web dev",
+    "dev:api": "pnpm --filter @agenda/api dev",
+    "dev:chat": "pnpm --filter @agenda/chat dev",
+    "dev:web": "pnpm --filter @agenda/web dev",
+    "dev:mcp": "tsx packages/agenda-mcp/src/index.ts",
+    "seed": "pnpm --filter @agenda/api seed",
+    "inspect": "mcp-inspector -e AGENDA_API_URL=${AGENDA_API_URL:-http://localhost:3002} tsx packages/agenda-mcp/src/index.ts",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/inspector": "2.13.0",
+    "@types/node": "^22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.1.1"
+  },
+  "description": "POC: API REST de agenda exposta como MCP server, com frontend de calendário + chat que executa ações via tools"
+}

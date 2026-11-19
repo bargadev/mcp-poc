@@ -1,0 +1,23 @@
+{
+  "name": "@agenda/chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agenda/api": "workspace:*",
+    "@agenda/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "fastify": "5.12.8",
+    "openai": "7.60.0",
+    "zod": "4.6.7"
+  },
+  "exports": {
+    "./eventos": "./src/eventos.ts"
+  }
+}
